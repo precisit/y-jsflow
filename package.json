@@ -1,0 +1,50 @@
+{
+  "name": "y-jsflow",
+  "version": "0.1.0",
+  "description": "Yjs provider for jsflow: sync Yjs documents and awareness over a jsflow room, peer to peer.",
+  "homepage": "https://jsflow.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/precisit/y-jsflow.git"
+  },
+  "bugs": {
+    "url": "https://github.com/precisit/y-jsflow/issues"
+  },
+  "keywords": [
+    "yjs",
+    "crdt",
+    "jsflow",
+    "webrtc",
+    "peer-to-peer",
+    "collaboration"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js"
+    }
+  },
+  "files": [
+    "src",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "sideEffects": false,
+  "license": "MIT",
+  "peerDependencies": {
+    "yjs": "^13.6.0",
+    "y-protocols": "^1.0.6"
+  },
+  "devDependencies": {
+    "yjs": "13.6.33",
+    "y-protocols": "1.0.7"
+  },
+  "scripts": {
+    "test": "node --test --test-force-exit test/*.test.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
