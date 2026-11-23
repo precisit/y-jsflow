@@ -144,6 +144,21 @@ test('a peer back after its hold ran out (a dropped link, a long-hidden phone) i
   done(a, b);
 });
 
+// DR3 part 3 (jsflow-demos live-3): a phone page hidden for a few seconds says BYE (its room: 'away'); the others drop
+// its cursor after leaveHoldMs. It keeps its links (under the mesh's 20 s dead window), so its own room reports no
+// peer down or up when it is shown, only 'connected' again. Nothing sent its state again before 0.1.2.
+test('a page back from away (BYE on hide, links kept: no peer events at it) is seen again at once', async () => {
+  const hub = new Hub({ delayMs: [1, 3] });
+  const a = peer(hub, { leaveHoldMs: 200 }), b = peer(hub, { leaveHoldMs: 200 });
+  b.p.awareness.setLocalStateField('user', { name: 'B' });
+  await until(() => a.p.awareness.states.get(b.doc.clientID)?.user?.name === 'B', 3000, 'B\'s cursor at A');
+  b.room._emit('state', 'away'); a.room._emit('peer', b.room.id, false);          // B's BYE: down at A only
+  await until(() => !a.p.awareness.states.has(b.doc.clientID), 2000, 'removed at A after the hold');
+  a.room._emit('peer', b.room.id, true); b.room._emit('state', 'connected');      // shown: up at A, connected at B
+  await until(() => a.p.awareness.states.get(b.doc.clientID)?.user?.name === 'B', 1000, 'B\'s cursor at A again');
+  done(a, b);
+});
+
 // The same client id can come back as a new peer before the old one's hold runs out: a page offline and back within
 // leaveHoldMs, reusing its Awareness. The old peer's hold must not remove the new peer's entry.
 test('a page back as a new peer within the hold keeps its cursor when the old peer\'s hold runs out', async () => {

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.2] - 2026-11-23
+
+- A phone page hidden for a few seconds (BYE on hide, the room `away`) is seen again at once when it is shown. The
+  others drop its cursor after `leaveHoldMs`. But a page hidden for less than the mesh's 20 s dead window keeps its
+  links, so its own room reports no peer going down or coming up, and 0.1.1's resend on a peer coming up never ran.
+  The cursor came back at its next change or at y-protocols' 15 s renewal: 11.6 s in a published example
+  (jsflow-demos DR3 part 3). On `connected` after `away`, the provider now sends its state to every peer again.
+
 ## [0.1.1] - 2026-11-23
 
 - A peer back after its `leaveHoldMs` ran out (a phone page hidden longer than that, a dropped link) is seen again

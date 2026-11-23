@@ -15,7 +15,7 @@
 // resyncMs each peer sends step 1 to one random peer (lost deletions, a lost last update).
 // Awareness: each peer sends only its own state, so a peer's entries are known exactly and removed leaveHoldMs
 // after it becomes unreachable (a hidden Safari page says BYE and comes back), with their clocks, so that it is
-// seen again at once if it comes back later.
+// seen again at once if it comes back later; a page back after 'away' sends its state to every peer again.
 import * as Y from 'yjs';
 import { encodeAwarenessUpdate, applyAwarenessUpdate, removeAwarenessStates, Awareness } from 'y-protocols/awareness';
 
@@ -56,6 +56,7 @@ export class JsflowProvider {
     this._greeted = new Set();     // peers I sent step 1 to since they came up: they send me what I lack
     this._owed = new Set();        // peers whose step 1 came while I was syncing: my step 1 goes to them once synced
     this._destroyed = false;
+    this._away = false;            // the room said 'away' (BYE on hide) and is not connected again yet
 
     this._onUpdate = (update, origin) => { if (origin !== this) this._sendUpdate(update); };
     this._onAwareness = ({ added, updated, removed }, origin) => {
@@ -66,7 +67,11 @@ export class JsflowProvider {
     this._onMessage = (from, data, info) => { if (info.channel === this.channel && data.length) this._receive(from, data); };
     this._onPeer = (peer, up) => up ? this._peerUp(peer) : this._peerDown(peer);
     this._onState = (s) => {
-      if (s === 'connected' && !this.synced) this._askNow();
+      if (s === 'away') this._away = true;
+      if (s === 'connected') {
+        if (this._away) { this._away = false; this._resendAwareness(); }
+        if (!this.synced) this._askNow();
+      }
       if (s === 'left' || s === 'superseded' || s === 'evicted') this._stop();
     };
 
@@ -199,6 +204,15 @@ export class JsflowProvider {
   _sendUpdate(update) {
     if (update.length + 1 <= MAX_DATAGRAM) { this.room.broadcast(frame(UPDATE, update), { channel: this.channel }); return; }
     for (const p of this.room.peers()) this._reliable(p, UPDATE, update);
+  }
+
+  // Back after 'away' (BYE on hide: phones, desktop Safari): the others dropped my cursor after leaveHoldMs, but a
+  // page hidden for less than the mesh's dead window (20 s) keeps its links, so its room reports no peer down and
+  // up, and _peerUp does not run. My state goes to every peer again, reliably, as to a new peer; a peer that still
+  // has it (a hide shorter than its hold) ignores it, at the same clock.
+  _resendAwareness() {
+    if (this.awareness.getLocalState() === null) return;
+    for (const p of this.room.peers()) this._sendAwareness(p);
   }
 
   _sendAwareness(peer) {
