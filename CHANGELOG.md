@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.1] - 2026-11-23
+
+- A peer back after its `leaveHoldMs` ran out (a phone page hidden longer than that, a dropped link) is seen again
+  at once. Its awareness clock is forgotten with its entries: y-protocols keeps a removed client's clock and takes
+  only a higher one, so its resent state was ignored until its next change, up to 15 s on an idle page (jsflow-demos
+  DR3).
+- A page back as a new peer within `leaveHoldMs` (offline and back, the same `Awareness`) keeps its cursor: the old
+  peer's hold running out no longer removes it.
+- The README: to reconnect, give the new provider the same `Awareness`.
+
 ## [0.1.0] - 2026-11-22
 
 The first release.

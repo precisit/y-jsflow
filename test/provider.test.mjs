@@ -1,7 +1,8 @@
 // y-jsflow against the in-process hub (test/hub.mjs): convergence under loss, late joiners, reload, leave, large updates.
-import { test } from 'node:test';
+import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import * as Y from 'yjs';
+import { Awareness } from 'y-protocols/awareness';
 import { JsflowProvider } from '../src/index.js';
 import { Hub } from './hub.mjs';
 
@@ -18,10 +19,15 @@ const same = (docs) => docs.every((d) => content(d) === content(docs[0])
 
 function peer(hub, opts = {}, doc = new Y.Doc()) {
   const room = hub.join();
-  const p = new JsflowProvider(room, doc, { ...FAST, ...opts });
+  const p = track(new JsflowProvider(room, doc, { ...FAST, ...opts }));
   return { room, doc, p, text: doc.getText('t'), map: doc.getMap('m') };
 }
 const done = (...ps) => { for (const x of ps) { x.p.destroy(); x.doc.destroy(); } };
+// every provider a test makes is destroyed after it, passed or failed: a failed assertion used to leave providers'
+// timers running, so the test process never ended (a hang instead of a failure). destroy() is idempotent.
+const live = new Set();
+const track = (p) => (live.add(p), p);   // a provider, or an Awareness a test made
+afterEach(() => { for (const p of live) p.destroy(); live.clear(); });
 
 // what a room sent, by kind (byte 0; a part counts as its inner kind)
 function spy(room) {
@@ -61,7 +67,11 @@ test('a late joiner asks one peer for the document and downloads it once, gets a
     askedBeforeSynced ??= new Set(sent.filter((s) => s.kind === 0x11).map((s) => s.to));
     step2.set(from, (step2.get(from) ?? 0) + d.length);
   });
-  const d = { room, doc, p: new JsflowProvider(room, doc, { ...FAST, resyncMs: 60000 }) };
+  // syncTimeoutMs out of reach: no timer races the answer, so the outcome does not depend on how busy the machine is.
+  // With FAST's 120 ms of wall clock the asked peer's answer came too late now and then on a busy machine (the gate
+  // once on 92d28bc, growth once on a laptop: "expected 1"), and the joiner rightly asked the next peer too; forcing the
+  // wait to 1 ms reproduces it every time ("asked 1,2,3"). Asking the next after the wait has tests of its own below.
+  const d = { room, doc, p: track(new JsflowProvider(room, doc, { ...FAST, resyncMs: 60000, syncTimeoutMs: 60000 })) };
   d.p.on('synced', () => syncedEvents++);
   await until(() => d.p.synced, 3000, 'late joiner synced');
   await until(() => same([a.doc, b.doc, c.doc, doc]), 3000, 'late joiner has everything');
@@ -119,6 +129,37 @@ test('a cursor survives a short absence (a hidden page that comes back) and goes
   done(a, b);
 });
 
+// DR3 (jsflow-demos): y-protocols keeps a client's clock after its state is removed and takes only a higher one. The
+// hold removed the entries but kept the clock, so a peer back after leaveHoldMs resent its state at that clock and
+// was ignored until its next change (an idle page renews every 15 s).
+test('a peer back after its hold ran out (a dropped link, a long-hidden phone) is seen again at once', async () => {
+  const hub = new Hub({ delayMs: [1, 3] });
+  const a = peer(hub, { leaveHoldMs: 200 }), b = peer(hub, { leaveHoldMs: 200 });
+  b.p.awareness.setLocalStateField('user', { name: 'B' });
+  await until(() => a.p.awareness.states.get(b.doc.clientID)?.user?.name === 'B', 3000, 'B\'s cursor at A');
+  a.room._emit('peer', b.room.id, false); b.room._emit('peer', a.room.id, false);
+  await until(() => !a.p.awareness.states.has(b.doc.clientID), 2000, 'removed after the hold');
+  a.room._emit('peer', b.room.id, true); b.room._emit('peer', a.room.id, true);   // B resends its state, unchanged
+  await until(() => a.p.awareness.states.get(b.doc.clientID)?.user?.name === 'B', 1000, 'B\'s cursor at A again');
+  done(a, b);
+});
+
+// The same client id can come back as a new peer before the old one's hold runs out: a page offline and back within
+// leaveHoldMs, reusing its Awareness. The old peer's hold must not remove the new peer's entry.
+test('a page back as a new peer within the hold keeps its cursor when the old peer\'s hold runs out', async () => {
+  const hub = new Hub({ delayMs: [1, 3] });
+  const a = peer(hub, { leaveHoldMs: 300 }), aw = track(new Awareness(new Y.Doc()));
+  const b = peer(hub, { awareness: aw }, aw.doc);
+  aw.setLocalStateField('user', { name: 'B' });
+  await until(() => a.p.awareness.states.get(aw.clientID)?.user?.name === 'B', 3000, 'B\'s cursor at A');
+  b.room.state = 'left'; b.room.drop(); b.p.destroy();   // offline without a goodbye: A sees the peer go down
+  const room = hub.join(), p = track(new JsflowProvider(room, aw.doc, { ...FAST, awareness: aw }));
+  aw.setLocalState({ user: { name: 'B' } });             // back, as a new peer, the same Awareness
+  await sleep(600);                                      // past the old peer's hold
+  assert.equal(a.p.awareness.states.get(aw.clientID)?.user?.name, 'B', 'kept: the new peer announced it');
+  p.destroy(); aw.destroy(); aw.doc.destroy(); done(a);
+});
+
 test('a 200 KB paste travels in parts and arrives whole', async () => {
   const hub = new Hub({ delayMs: [1, 5] });
   const a = peer(hub), b = peer(hub), c = peer(hub);
@@ -137,7 +178,7 @@ test('a document that takes longer than syncTimeoutMs to arrive: the joiner wait
   const a = peer(hub);
   a.text.insert(0, 'y'.repeat(1_200_000));
   await until(() => a.p.synced, 2000, 'a synced');
-  const room = hub.join(), doc = new Y.Doc(), p = new JsflowProvider(room, doc, { ...FAST, resyncMs: 60000, syncTimeoutMs: 300 });   // the first part comes after ~3 hops of 30 ms
+  const room = hub.join(), doc = new Y.Doc(), p = track(new JsflowProvider(room, doc, { ...FAST, resyncMs: 60000, syncTimeoutMs: 300 }));   // the first part comes after ~3 hops of 30 ms
   let lenAtSynced = -1; p.on('synced', () => (lenAtSynced = doc.getText('t').length));
   await until(() => p.synced, 5000, 'joiner synced');
   assert.equal(lenAtSynced, 1_200_000, 'synced with the whole document, not after the first wait');
@@ -149,7 +190,7 @@ test('the asked peer drops while answering and comes back: the joiner asks it ag
   const a = peer(hub);
   a.text.insert(0, 'z'.repeat(1_200_000));
   await until(() => a.p.synced, 2000, 'a synced');
-  const room = hub.join(), doc = new Y.Doc(), p = new JsflowProvider(room, doc, { ...FAST, resyncMs: 60000, syncTimeoutMs: 300 });
+  const room = hub.join(), doc = new Y.Doc(), p = track(new JsflowProvider(room, doc, { ...FAST, resyncMs: 60000, syncTimeoutMs: 300 }));
   let lenAtSynced = -1; p.on('synced', () => (lenAtSynced = doc.getText('t').length));
   // the link drops after a few parts: the joiner sees a down, and the rest of that answer (its part id) never arrives
   let parts = 0, cutId = null;
@@ -176,7 +217,7 @@ test('a link that drops for a moment mid-answer (the SDK keeps delivering): the 
   const a = peer(hub);
   a.text.insert(0, 'w'.repeat(1_200_000));
   await until(() => a.p.synced, 2000, 'a synced');
-  const room = hub.join(), doc = new Y.Doc(), p = new JsflowProvider(room, doc, { ...FAST, resyncMs: 60000, syncTimeoutMs: 300, leaveHoldMs: 1000 });
+  const room = hub.join(), doc = new Y.Doc(), p = track(new JsflowProvider(room, doc, { ...FAST, resyncMs: 60000, syncTimeoutMs: 300, leaveHoldMs: 1000 }));
   let lenAtSynced = -1, step2 = 0, parts = 0;
   p.on('synced', () => (lenAtSynced = doc.getText('t').length));
   room.on('message', (from, d) => {
@@ -206,7 +247,7 @@ test('a joiner that starts alone (join() resolves before the first link) asks as
   a.text.insert(0, 'from a');
   await until(() => a.p.synced, 2000, 'a synced');
   const room = hub.join(); room.state = 'joining';          // linked to nobody yet: peers() is empty
-  const doc = new Y.Doc(), p = new JsflowProvider(room, doc, { ...FAST, syncTimeoutMs: 3000 });
+  const doc = new Y.Doc(), p = track(new JsflowProvider(room, doc, { ...FAST, syncTimeoutMs: 3000 }));
   await sleep(50);
   const t0 = Date.now();
   room.state = 'connected'; room._emit('state', 'connected');

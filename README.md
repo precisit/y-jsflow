@@ -50,17 +50,18 @@ new EditorView({
 | option | default | |
 |---|---|---|
 | `channel` | `13` | The app channel (0–13) the provider uses for everything. Keep your own messages on other channels. |
-| `awareness` | a new one | An existing y-protocols `Awareness` for this document. One the provider creates is destroyed with it. |
+| `awareness` | a new one | An existing y-protocols `Awareness` for this document. One the provider creates is destroyed with it. To reconnect (`destroy()`, `room.leave()`, a new `join()` and provider), give the new provider the same `Awareness`: a new one starts its clock at 0, and the others ignore it until it passes the old one. |
 | `resyncMs` | `15000` | How often each peer compares state with one random peer (±20 %), to repair updates lost on the way. |
-| `leaveHoldMs` | `5000` | How long an unreachable peer's cursor stays before it is removed. A phone page that is briefly hidden keeps its cursor. |
+| `leaveHoldMs` | `5000` | How long an unreachable peer's cursor stays before it is removed. A phone page that is briefly hidden keeps its cursor; a closed tab's cursor also stays this long. |
 | `syncTimeoutMs` | `3000` | How long to wait for one peer's answer before asking the next. A large document arrives in parts, and each part starts the wait again. It is also how long a peer with nobody else in the room waits before `synced`. |
 
 - `provider.synced` is `true` once a peer's copy of the document has been applied. It is also `true` when the
   room had no one else after `syncTimeoutMs`, or once every peer was asked and none answered.
 - `provider.on('synced', f)` / `provider.off('synced', f)`: fires once, when `synced` turns true.
 - `provider.awareness`: the y-protocols `Awareness` to hand to your editor binding.
-- `provider.destroy()`: removes your cursor at the others at once, stops syncing and detaches from the room. The
-  room stays joined.
+- `provider.destroy()`: removes your cursor at the others at once while the page is live, stops syncing and
+  detaches from the room. The room stays joined. Called as the page unloads (a closed tab, a reload), its removal
+  goes down with the page, and the others drop your cursor after `leaveHoldMs`.
 
 ## How it syncs
 
@@ -72,8 +73,9 @@ new EditorView({
 - **Repair.** Yjs notices when an update arrives before one it depends on, and the provider asks that peer for
   what is missing at once. The periodic exchange (`resyncMs`) covers what nothing else notices, such as a lost
   deletion or a lost last update.
-- **Awareness.** Each peer sends only its own state. A peer that leaves with `destroy()` disappears at once;
-  one that becomes unreachable disappears after `leaveHoldMs`.
+- **Awareness.** Each peer sends only its own state. A peer that calls `destroy()` in a live page disappears at
+  once. One that becomes unreachable disappears after `leaveHoldMs`, and so does a page that closes or reloads: its
+  last messages go down with it, so the others see it go quiet (about `leaveHoldMs` plus half a second).
 
 ## Keeping documents
 

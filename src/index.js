@@ -14,7 +14,8 @@
 // Repair: an update that leaves Yjs with pending structs (one before it was lost) asks its sender at once; every
 // resyncMs each peer sends step 1 to one random peer (lost deletions, a lost last update).
 // Awareness: each peer sends only its own state, so a peer's entries are known exactly and removed leaveHoldMs
-// after it becomes unreachable (a hidden Safari page says BYE and comes back).
+// after it becomes unreachable (a hidden Safari page says BYE and comes back), with their clocks, so that it is
+// seen again at once if it comes back later.
 import * as Y from 'yjs';
 import { encodeAwarenessUpdate, applyAwarenessUpdate, removeAwarenessStates, Awareness } from 'y-protocols/awareness';
 
@@ -183,9 +184,14 @@ export class JsflowProvider {
       this._holds.delete(peer);
       this._queues.delete(peer); this._greeted.delete(peer); this._owed.delete(peer);
       for (const k of this._parts.keys()) if (k.startsWith(`${peer}:`)) this._parts.delete(k);
-      const ids = [...(this._clients.get(peer) ?? [])].filter((c) => this.awareness.states.has(c));
+      // its entries go, and so do their clocks: y-protocols keeps a removed client's clock and takes only a higher
+      // one, so the peer coming back (resending its state at the same clock) would be ignored until its next change.
+      // An id another peer announced since is that peer's now (_awareness), not in this set, and stays.
+      const ids = [...(this._clients.get(peer) ?? [])];
       this._clients.delete(peer);
-      if (ids.length) removeAwarenessStates(this.awareness, ids, this);
+      const shown = ids.filter((c) => this.awareness.states.has(c));
+      if (shown.length) removeAwarenessStates(this.awareness, shown, this);
+      for (const c of ids) this.awareness.meta.delete(c);
     }));
   }
 
@@ -295,7 +301,13 @@ export class JsflowProvider {
     let set = this._clients.get(from);
     if (!set) this._clients.set(from, (set = new Set()));
     for (const [added, updated, removed] of seen) {
-      for (const c of [...added, ...updated]) if (c !== this.doc.clientID) set.add(c);
+      for (const c of [...added, ...updated]) {
+        if (c === this.doc.clientID) continue;
+        set.add(c);
+        // the same client id from a new peer (a page offline and back within leaveHoldMs): its entry is the new
+        // peer's, so the old peer's hold running out leaves it alone
+        for (const [p, s] of this._clients) if (p !== from) s.delete(c);
+      }
       for (const c of removed) set.delete(c);
     }
   }

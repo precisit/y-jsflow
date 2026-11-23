@@ -17,7 +17,7 @@ export interface RoomLike {
 export interface JsflowProviderOptions {
   /** The app channel the provider uses for everything, 0–13. Default 13; keep it free of the app's own messages. */
   channel?: number;
-  /** An existing y-protocols Awareness for this document. Default: a new one, destroyed with the provider. */
+  /** An existing y-protocols Awareness for this document. Default: a new one, destroyed with the provider. To reconnect, give the new provider the same Awareness: a new one starts its clock at 0 and the others ignore it until it passes the old one. */
   awareness?: Awareness;
   /** How often (ms, ±20 %) the provider compares state with one random peer, to repair lost updates. Default 15000. */
   resyncMs?: number;
@@ -48,6 +48,6 @@ export class JsflowProvider {
   readonly synced: boolean;
   on(ev: 'synced', f: (synced: true) => void): this;
   off(ev: 'synced', f: (synced: true) => void): this;
-  /** Removes my awareness state at the others, stops syncing and detaches. The room stays joined: call room.leave() yourself. */
+  /** Removes my awareness state at the others (at once in a live page; as the page unloads, the removal goes down with it and they drop it after leaveHoldMs), stops syncing and detaches. The room stays joined: call room.leave() yourself. */
   destroy(): void;
 }
